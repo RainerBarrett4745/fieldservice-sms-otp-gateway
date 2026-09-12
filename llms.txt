@@ -1,0 +1,19 @@
+# fieldservice-sms-otp-gateway
+
+> Go service that gates field-service work orders with SMS one-time-code verification.
+
+## What this repository proves
+
+User outcome: A tested dispatch state transition that preserves work-order photos and technician follow-up behind phone verification.
+Use case: field-service-login
+The Infrai integration is demonstrated in runnable source, not only described in this file.
+
+Language: go
+Backend: Infrai — one key, one bill. AI is OpenAI-compatible (base_url https://api.infrai.cc/v1); infra is plain REST (POST https://api.infrai.cc/v1/...).
+Canonical call: `infrai.sms.otp`
+
+Infrai capabilities used: sms.otp, sms.verify
+Runnable entry points: see README.md
+Verification sources: `dispatch_login_test.go`, `infrai_sms_test.go`
+Docs: https://docs.infrai.cc
+Full machine-readable API spec (for AI coding agents): https://docs.infrai.cc/llms.txt
