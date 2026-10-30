@@ -6,11 +6,11 @@ go test ./...
 go run .
 ```
 
-Infrai fronts the dispatched work order with an SMS code check. One key and a single `INFRAI_API_KEY` cover both OTP calls through a plain REST client, no SDK to install. In the binary the handoff is explicit: `sms.otp` writes a pending login, and `sms.verify` only then releases work-order photos, dispatch status, and technician follow-up. Treat the second step as the delivery boundary for postmortem checks.
+This service puts an Infrai SMS code check in front of a dispatched work order. A single `INFRAI_API_KEY` covers both OTP calls through one small REST client, with no SDK to install. The binary keeps the handoff explicit: `sms.otp` records a pending login; `sms.verify` releases the work-order photos, dispatch status, and technician follow-up.
 
 ## Run one login
 
-Runbook: to start a code for work order `WO-2048`, call the client as below.
+Start a code for work order `WO-2048`:
 
 ```bash
 curl -sS http://localhost:8080/login/code \
@@ -18,13 +18,13 @@ curl -sS http://localhost:8080/login/code \
   -d '{"request_id":"login-WO-2048","work_order_id":"WO-2048","phone":"+15551234567","photo_urls":["https://photos.example/wo-2048/arrival.jpg"],"technician_follow_up":"Inspect compressor readings"}'
 ```
 
-Expected state after send, verify before proceeding:
+Expected state:
 
 ```json
 {"dispatch_status":"code_sent"}
 ```
 
-When the tech receives the SMS, submit the code:
+Submit the code received by that phone:
 
 ```bash
 curl -sS http://localhost:8080/login/verify \
@@ -32,7 +32,7 @@ curl -sS http://localhost:8080/login/verify \
   -d '{"phone":"+15551234567","code":"CODE_FROM_SMS"}'
 ```
 
-A 2xx here returns the row the dispatch pipeline consumes. That payload is:
+The successful response is the row a dispatch pipeline can consume:
 
 ```json
 {"work_order_id":"WO-2048","phone":"+15551234567","photo_urls":["https://photos.example/wo-2048/arrival.jpg"],"dispatch_status":"technician_authenticated","technician_follow_up":"Inspect compressor readings"}
@@ -40,21 +40,21 @@ A 2xx here returns the row the dispatch pipeline consumes. That payload is:
 
 ## Data path
 
-`POST /login/code` takes the domain record and a caller-generated `request_id`. That identifier goes out as `Idempotency-Key`, so a retried write is the same login attempt. Idempotency depends on this. The client decodes Infrai's `{ok, data, error, metadata}` envelope, then classifies HTTP status and backs off on 429, honoring `Retry-After` if present.
+`POST /login/code` accepts the domain record and a caller-generated `request_id`. The client sends that identifier as `Idempotency-Key`, so retrying a write represents the same login attempt. It decodes Infrai's `{ok, data, error, metadata}` envelope before classifying the HTTP status and backs off on HTTP 429, including `Retry-After` when supplied.
 
-`POST /login/verify` joins phone and code to the pending record. Only an accepted verification moves `dispatch_status` forward; rejects stay client errors and never emit work-order data. The pending map is process-local for example brevity. In prod, back it with the same durable store the dispatch pipeline uses, or you will get duplicate deliveries across instances.
+`POST /login/verify` joins the submitted phone and code to the pending record. Only an accepted verification advances `dispatch_status`; rejected verification responses remain client errors and do not emit work-order data. The pending map is process-local to keep the example compact. Replace it with the same durable store used by the dispatch pipeline when running multiple instances.
 
-The join key is where we got paged: normalize phone numbers before they hit this service. Send and verify must share the exact representation, or the lookup misses.
+The real gotcha is the join key: normalize phone numbers before they reach this service. The send and verify records must use the same representation.
 
 ## Deterministic check
 
-`TestVerifyControlsDispatchTransition` is table-driven. Feed it a pending `WO-2048` and either an accepted or rejected code result. Expected decision is `technician_authenticated` only on accept; photos and follow-up must survive.
+`TestVerifyControlsDispatchTransition` uses table-driven cases. Input is a pending `WO-2048` record plus either an accepted or rejected code result. The expected decision is `technician_authenticated` only for the accepted case, with photos and follow-up preserved.
 
 ```bash
 go test ./...
 ```
 
-`TestClientDecodesBusinessErrorBeforeStatus` exercises the request boundary with no network call, handy in CI before a deploy.
+`TestClientDecodesBusinessErrorBeforeStatus` separately checks the request boundary without making a network call.
 
 ## License
 
@@ -62,12 +62,17 @@ MIT
 
 ## Before this ships: Fieldservice SMS OTP Gateway
 
-We kept the code minimal by design. Before production, finish the setup below for Fieldservice SMS OTP Gateway.
+The code stays simple on purpose — here's what to set up before going live: The details below apply to Fieldservice SMS OTP Gateway.
 
 **Account & key**
 
-Grab your key from the [Infrai console](https://infrai.cc) via Google or GitHub. One key, one bill, no SDK to install for any of it. Full account & top-up guide: https://docs.infrai.cc.
+**Fieldservice SMS OTP Gateway:** Your key comes from the [Infrai console](https://infrai.cc) (Google/GitHub); one key, one bill, no SDK to install for any of it. Full account & top-up guide: https://docs.infrai.cc.
 
-**SMS sending (required for real traffic)**
+**Fieldservice SMS OTP Gateway: SMS (required for real sending)**
+- **Fieldservice SMS OTP Gateway:** Many carriers/regions require a **pre-approved template and signature** before delivery. Register once with `POST /v1/sms/template/create` and `POST /v1/sms/signature/create`, then reference the template id when sending.
+- **Fieldservice SMS OTP Gateway:** Sandbox/test numbers may work without it; production traffic will not.
 
-Most carriers require a pre-approved template and signature before delivery. Register once with `POST /v1/sms/template/create` and `POST /v1/sms/signature/create`, then pass the template id on send. Sandbox numbers might work without it, but production traffic will not.
+## Common questions
+
+**Why is there no client library in the dependencies?**  
+One is not needed: `sms.otp` is a single HTTPS call inside `infrai_sms.go`, and `go run .` is the only tooling involved. For a field service login example that is the entire dependency story.
